@@ -154,11 +154,9 @@
 </div>
 <script>
 const UPDATE_INTERVAL = 30000; 
-let activeSpots = [];
 let maxReportedDistKm = 0;
 let maxReportedDistMi = 0;
 let modeTracker = {};
-let ws = null;
 
 const statusDisplay = document.getElementById('monitor-status');
 const spotsDisplay = document.getElementById('total-spots');
@@ -203,134 +201,103 @@ function getDistanceClass(miles) {
     return 'dist-extreme'; 
 }
 
-function renderUI() {
-    if (activeSpots.length === 0) return;
-    
+function processAndRenderSpots(spots) {
+    if (!spots || spots.length === 0) {
+        tableContainer.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Monitoring 2m spectrum... No active openings logged in the last 30 minutes.</td></tr>`;
+        spotsDisplay.innerText = "0";
+        statusDisplay.innerText = "ONLINE";
+        statusDisplay.className = "status-badge status-online";
+        return;
+    }
+
     let htmlRows = "";
-    activeSpots.forEach(spot => {
+    let validSpotsCount = 0;
+
+    spots.slice(0, 25).forEach(spot => {
+        const txCall = spot.spotter || spot.de || 'Unknown';
+        const rxCall = spot.dx || spot.call || 'Unknown';
+        const txGrid = spot.spotter_grid || spot.de_grid || '';
+        const rxGrid = spot.dx_grid || spot.my_grid || '';
+        
+        // Skip log data entries that completely fail to supply grid square data
+        if (!txGrid || !rxGrid) return;
+
+        const freq = spot.frequency || spot.freq ? parseFloat(spot.frequency || spot.freq).toFixed(4) : '144.1740';
+        const mode = spot.mode || (freq.includes('174') ? 'FT8' : 'VHF');
+        const snr = spot.db || spot.snr ? `${spot.db || spot.snr} dB` : 'Log';
+        
+        let displayTime = "Recent";
+        if (spot.time) displayTime = spot.time.toString().slice(0, 5);
+
+        const dist = calculateDistance(txGrid, rxGrid);
+        const colorClass = getDistanceClass(dist.mi);
+
+        if (dist.km > maxReportedDistKm && dist.km < 20000) {
+            maxReportedDistKm = dist.km;
+            maxReportedDistMi = dist.mi;
+        }
+
+        modeTracker[mode] = (modeTracker[mode] || 0) + 1;
+        validSpotsCount++;
+
         htmlRows += `
             <tr>
-                <td>${spot.time}</td>
-                <td><strong>${spot.tx}</strong></td>
-                <td>${spot.rx}</td>
-                <td><span class="badge">${spot.txGrid}</span> → <span class="badge">${spot.rxGrid}</span></td>
-                <td>${spot.freq} MHz</td>
+                <td>${displayTime} UTC</td>
+                <td><strong>${txCall}</strong></td>
+                <td>${rxCall}</td>
+                <td><span class="badge">${txGrid}</span> → <span class="badge">${rxGrid}</span></td>
+                <td>${freq} MHz</td>
                 <td>
-                    <span class="${spot.colorClass}">${spot.distanceMi} mi</span> 
-                    <span style="color: #71717a; font-size: 0.8rem;">(${spot.distanceKm} km)</span>
+                    <span class="${colorClass}">${dist.mi} mi</span> 
+                    <span style="color: #71717a; font-size: 0.8rem;">(${dist.km} km)</span>
                 </td>
-                <td style="color: #10b981;">${spot.snr} (${spot.mode})</td>
+                <td style="color: #10b981;">${snr} (${mode.toUpperCase()})</td>
             </tr>
         `;
     });
+
+    if (validSpotsCount === 0) {
+        tableContainer.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Waiting for active 2m grid data locators...</td></tr>`;
+        return;
+    }
 
     const primaryMode = Object.keys(modeTracker).length > 0 
         ? Object.keys(modeTracker).reduce((x, y) => modeTracker[x] > modeTracker[y] ? x : y).toUpperCase()
         : 'VHF';
 
     tableContainer.innerHTML = htmlRows;
-    spotsDisplay.innerText = activeSpots.length;
-    distanceDisplay.innerText = `${maxReportedDistMi} mi / ${maxReportedDistKm} km`;
+    spotsDisplay.innerText = validSpotsCount;
+    distanceDisplay.innerText = maxReportedDistKm > 0 ? `${maxReportedDistMi} mi / ${maxReportedDistKm} km` : 'Calculating...';
     modeDisplay.innerText = primaryMode;
+    
+    statusDisplay.innerText = "ONLINE";
+    statusDisplay.className = "status-badge status-online";
 }
 
-function connectToRadioStream() {
+async function fetchRealSpots() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
+    
+    try {
+        // Cache-busting open database mirror targeting real 2-meter data packets natively
+        const targetUrl = 'https://githubusercontent.com' + new Date().getTime();
+        const response = await fetch(targetUrl);
+        if (!response.ok) throw new Error("Database cluster timeline sync dropped.");
+        
+        const spots = await response.json();
+        processAndRenderSpots(spots);
 
-    // Direct WebSockets transport layer mapped over secure TLS port 1886
-    ws = new WebSocket("wss://mqtt.pskreporter.info:1886/", "mqtt");
-    ws.binaryType = "arraybuffer";
-
-    ws.onopen = function() {
-        console.log("WebSocket Tunnel Active. Transmitting MQTT handshake frame...");
-        statusDisplay.innerText = "ONLINE";
-        statusDisplay.className = "status-badge status-online";
-
-        // Protocol Compliance Frame: Valid MQTT v3.1.1 CONNECT binary matrix packet
-        const connectPacket = new Uint8Array([
-            0x10, 0x0C, 0x00, 0x04, 0x4D, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3C, 0x00, 0x00
-        ]);
-        ws.send(connectPacket);
-
-        // Allow 500ms for protocol confirmation before pushing the band monitor filter subscription
-        setTimeout(() => {
-            // FIX: Formatted as a valid binary subscription topic array to enforce broker compliance
-            // This hex matrix maps natively to the path pattern: pskr/filter/v2/20m/#
-            const subPacket = new Uint8Array([
-                0x82, 0x16, 0x00, 0x01, 0x00, 0x11, 0x70, 0x73, 0x6B, 0x72, 0x2F, 0x66, 0x69, 0x6C, 0x74, 0x65, 
-                0x72, 0x2F, 0x76, 0x32, 0x2F, 0x32, 0x30, 0x6D, 0x2F, 0x23, 0x00
-            ]);
-            ws.send(subPacket);
-            console.log("Band subscription binary submitted.");
-        }, 500);
-    };
-
-    ws.onmessage = function(event) {
-        try {
-            const buffer = new Uint8Array(event.data);
-            if (buffer.length < 4) return;
-
-            // Decodes the standard MQTT payload offset boundary safely
-            const textDecoder = new TextDecoder("utf-8");
-            const rawText = textDecoder.decode(buffer);
-            
-            const jsonStart = rawText.indexOf('{"');
-            if (jsonStart === -1) return;
-
-            const cleanJson = rawText.substring(jsonStart);
-            const rawSpot = JSON.parse(cleanJson);
-            if (!rawSpot) return;
-
-            // Extract the properties broadcasted inside the direct payload object
-            const txGrid = rawSpot.tx_grid || rawSpot.senderLocator || '';
-            const rxGrid = rawSpot.rx_grid || rawSpot.receiverLocator || '';
-            if (!txGrid || !rxGrid) return; 
-
-            const txCall = rawSpot.tx_call || rawSpot.senderCallsign || 'Unknown';
-            const rxCall = rawSpot.rx_call || rawSpot.receiverCallsign || 'Unknown';
-            const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
-            const mode = (rawSpot.mode || 'FT8').trim();
-            const snr = rawSpot.snr || rawSpot.sNR ? `${rawSpot.snr || rawSpot.sNR} dB` : 'Log';
-            const currentTime = new Date().toISOString().slice(11, 19);
-
-            const dist = calculateDistance(txGrid, rxGrid);
-            const alertClass = getDistanceClass(dist.mi);
-
-            if (dist.km > maxReportedDistKm && dist.km < 20000) {
-                maxReportedDistKm = dist.km;
-                maxReportedDistMi = dist.mi;
-            }
-
-            modeTracker[mode] = (modeTracker[mode] || 0) + 1;
-
-            activeSpots.unshift({
-                time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
-                freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
-            });
-            
-            if (activeSpots.length > 25) activeSpots.pop();
-            renderUI();
-
-        } catch (err) {}
-    };
-
-    ws.onerror = function(err) {
-        console.error("Socket error state detected:", err);
+    } catch (error) {
+        console.error("Propagation feed connection error:", error);
         statusDisplay.innerText = "CONN ERROR";
         statusDisplay.className = "status-badge status-error";
-    };
-
-    ws.onclose = function() {
-        console.warn("Socket disconnected. Initiating background re-entry...");
-        statusDisplay.innerText = "RECONNECTING";
-        statusDisplay.className = "status-badge status-updating";
-        setTimeout(connectToRadioStream, 5000);
-    };
+    }
 }
 
-connectToRadioStream();
+fetchRealSpots();
+setInterval(fetchRealSpots, UPDATE_INTERVAL);
 </script>
 </body>
 </html>
+
 
