@@ -204,11 +204,12 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        // Direct, unproxied link straight to the real HamQTH database feed
-        const response = await fetch('https://hamqth.com');
+        // Direct, unproxied HTTPS link straight to the secure Spothole 2-meter database
+        const response = await fetch('https://spothole.app');
         if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
         
-        const spots = await response.json();
+        const data = await response.json();
+        const spots = data.spots || [];
         
         if (!spots || spots.length === 0) {
             tableContainer.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No live 2m spots reported on the cluster in the last hour. Monitoring band...</td></tr>`;
@@ -221,18 +222,18 @@ async function fetchRealSpots() {
         let modeTracker = {};
         let htmlRows = "";
 
-        spots.slice(0, 25).forEach(spot => {
-            const txCall = spot.spotter || 'Unknown';
-            const rxCall = spot.dx || 'Unknown';
-            const txGrid = spot.spotter_grid || '';
-            const rxGrid = spot.dx_grid || '';
-            const freq = spot.frequency ? parseFloat(spot.frequency).toFixed(4) : '144.0000';
+        spots.forEach(spot => {
+            const txCall = spot.tx_call || 'Unknown';
+            const rxCall = spot.rx_call || 'Unknown';
+            const txGrid = spot.tx_locator || spot.tx_grid || '';
+            const rxGrid = spot.rx_locator || spot.rx_grid || '';
+            const freq = spot.frequency_mhz ? parseFloat(spot.frequency_mhz).toFixed(4) : '144.0000';
             const mode = spot.mode || 'VHF';
-            const snr = spot.db ? `${spot.db} dB` : 'Log';
+            const snr = spot.snr ? `${spot.snr} dB` : 'Log';
             
             let displayTime = "Recent";
-            if (spot.time) {
-                displayTime = spot.time.slice(0, 8);
+            if (spot.timestamp) {
+                displayTime = new Date(spot.timestamp).toISOString().slice(11, 19);
             }
 
             const dist = calculateDistance(txGrid, rxGrid);
