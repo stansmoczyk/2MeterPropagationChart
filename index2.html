@@ -153,11 +153,18 @@
     </footer>
 </div>
 <script>
+// 1. DYNAMIC CDN INJECTION: Instantly forces the library to mount before boot routines run
+const cdnScript = document.createElement('script');
+cdnScript.src = "https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js";
+cdnScript.type = "text/javascript";
+document.head.appendChild(cdnScript);
+
 let activeSpots = [];
 let maxReportedDistKm = 0;
 let maxReportedDistMi = 0;
 let modeTracker = {};
 
+// Visual metrics interface bindings
 const statusDisplay = document.getElementById('monitor-status');
 const spotsDisplay = document.getElementById('total-spots');
 const distanceDisplay = document.getElementById('max-distance');
@@ -232,77 +239,87 @@ function renderUI() {
     modeDisplay.innerText = primaryMode;
 }
 
-// Setup Secure MQTT WebSocket Connection directly to the PSK Reporter Stream
-const clientId = "client-" + Math.floor(Math.random() * 100000);
-const client = new Paho.MQTT.Client("mqtt.pskreporter.info", 1886, clientId);
+let client = null;
 
-client.onConnectionLost = function(responseObject) {
-    console.warn("Connection Dropped. Reconnecting...", responseObject.errorMessage);
-    statusDisplay.innerText = "RECONNECTING";
+// Runs the initialization sequence only when the browser confirms the script is ready
+cdnScript.onload = function() {
+    console.log("Paho Library downloaded and compiled natively.");
+    initializeWebSocketStream();
+};
+
+function initializeWebSocketStream() {
+    statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
-    setTimeout(() => { client.connect({ useSSL: true, onSuccess: onConnect }); }, 5000);
-};
 
-client.onMessageArrived = function(message) {
-    try {
-        const rawSpot = JSON.parse(message.payloadString);
-        if (!rawSpot) return;
-
-        // Extract clean metrics out of the WebSocket data frame
-        const txGrid = rawSpot.senderLocator || rawSpot.tx_grid || '';
-        const rxGrid = rawSpot.receiverLocator || rawSpot.rx_grid || '';
-        if (!txGrid || !rxGrid) return; // Skip logs missing grid calculations
-
-        const txCall = rawSpot.senderCallsign || 'Unknown';
-        const rxCall = rawSpot.receiverCallsign || 'Unknown';
-        const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
-        const mode = (rawSpot.mode || 'FT8').trim();
-        const snr = rawSpot.sNR ? `${rawSpot.sNR} dB` : 'Log';
-        const currentTime = new Date().toISOString().slice(11, 19);
-
-        const dist = calculateDistance(txGrid, rxGrid);
-        const alertClass = getDistanceClass(dist.mi);
-
-        if (dist.km > maxReportedDistKm && dist.km < 20000) {
-            maxReportedDistKm = dist.km;
-            maxReportedDistMi = dist.mi;
-        }
-
-        modeTracker[mode] = (modeTracker[mode] || 0) + 1;
-
-        // Push new spot into memory array, capping list size to 25 items
-        activeSpots.unshift({
-            time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
-            freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
-        });
-        
-        if (activeSpots.length > 25) activeSpots.pop();
-        renderUI();
-
-    } catch (err) {
-        console.error("Payload processing error:", err);
-    }
-};
-
-function onConnect() {
-    console.log("Secure live WebSocket radio stream running.");
-    statusDisplay.innerText = "ONLINE";
-    statusDisplay.className = "status-badge status-online";
+    const clientId = "client-" + Math.floor(Math.random() * 100000);
     
-    // Subscribe directly to the 2m band filter path channel
-    client.subscribe("pskr/filter/v2/2m/+/+/+/+/+/+/+");
-}
+    // RESOLUTION: Uses the correct constructor syntax to completely prevent the ReferenceError
+    client = new Paho.Client("mqtt.pskreporter.info", 1886, clientId);
 
-// Connect instantly over safe, encrypted network routes
-client.connect({ 
-    useSSL: true, 
-    onSuccess: onConnect,
-    onFailure: function(err) {
-        console.error("WebSocket setup failed:", err);
-        statusDisplay.innerText = "CONN ERROR";
-        statusDisplay.className = "status-badge status-error";
+    client.onConnectionLost = function(responseObject) {
+        console.warn("Connection lost. Retrying standard WebSocket tunnel setup...", responseObject.errorMessage);
+        statusDisplay.innerText = "RECONNECTING";
+        statusDisplay.className = "status-badge status-updating";
+        setTimeout(() => { client.connect({ useSSL: true, onSuccess: onConnect }); }, 5000);
+    };
+
+    client.onMessageArrived = function(message) {
+        try {
+            const rawSpot = JSON.parse(message.payloadString);
+            if (!rawSpot) return;
+
+            const txGrid = rawSpot.senderLocator || rawSpot.tx_grid || '';
+            const rxGrid = rawSpot.receiverLocator || rawSpot.rx_grid || '';
+            if (!txGrid || !rxGrid) return; 
+
+            const txCall = rawSpot.senderCallsign || 'Unknown';
+            const rxCall = rawSpot.receiverCallsign || 'Unknown';
+            const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
+            const mode = (rawSpot.mode || 'FT8').trim();
+            const snr = rawSpot.sNR ? `${rawSpot.sNR} dB` : 'Log';
+            const currentTime = new Date().toISOString().slice(11, 19);
+
+            const dist = calculateDistance(txGrid, rxGrid);
+            const alertClass = getDistanceClass(dist.mi);
+
+            if (dist.km > maxReportedDistKm && dist.km < 20000) {
+                maxReportedDistKm = dist.km;
+                maxReportedDistMi = dist.mi;
+            }
+
+            modeTracker[mode] = (modeTracker[mode] || 0) + 1;
+
+            activeSpots.unshift({
+                time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
+                freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
+            });
+            
+            if (activeSpots.length > 25) activeSpots.pop();
+            renderUI();
+
+        } catch (err) {
+            console.error("Payload tracking error:", err);
+        }
+    };
+
+    function onConnect() {
+        console.log("Connected to live PSK Reporter stream cluster network.");
+        statusDisplay.innerText = "ONLINE";
+        statusDisplay.className = "status-badge status-online";
+        client.subscribe("pskr/filter/v2/2m/+/+/+/+/+/+/+");
     }
-});
+
+    client.connect({ 
+        useSSL: true, 
+        onSuccess: onConnect,
+        onFailure: function(err) {
+            console.error("Secure data stream failed to connect:", err);
+            statusDisplay.innerText = "CONN ERROR";
+            statusDisplay.className = "status-badge status-error";
+        }
+    });
+}
 </script>
 </body>
 </html>
+
