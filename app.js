@@ -59,7 +59,6 @@ function processAndRenderSpots(spots) {
     let validSpotsCount = 0;
 
     spots.slice(0, 25).forEach(spot => {
-        // Safe parameter extractor mapping to standard raw cluster logs natively
         const txCall = spot.spotter || spot.de || 'Unknown';
         const rxCall = spot.dx || spot.call || 'Unknown';
         const txGrid = spot.spotter_grid || spot.de_grid || '';
@@ -124,9 +123,9 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        // Direct download from the correct, fully-resolved raw GitHub file domain
+        // Direct, unproxied link targeting the clean raw data repository array natively
         const response = await fetch('https://githubusercontent.com');
-        if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
+        if (!response.ok) throw new Error(`HTTP Status Error: ${response.status}`);
         
         const spots = await response.json();
         processAndRenderSpots(spots);
@@ -139,4 +138,3 @@ async function fetchRealSpots() {
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
-
