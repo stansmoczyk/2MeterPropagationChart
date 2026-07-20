@@ -271,9 +271,10 @@ async function fetchRealSpots() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
     
+    // Route 1: Try Spothole's Secure Production Database
     try {
         const response = await fetch('https://spothole.app');
-        if (!response.ok) throw new Error(`Primary Error Status: ${response.status}`);
+        if (!response.ok) throw new Error(`Spothole Error Status: ${response.status}`);
         
         const data = await response.json();
         const spots = data.spots || [];
@@ -284,8 +285,12 @@ async function fetchRealSpots() {
         console.warn("Primary database rate-limited or offline. Switching to backup server...");
     }
 
+    // Route 2: Backup Server (Completely rewritten to prevent url parsing errors)
     try {
-        const backupResponse = await fetch('https://allorigins.win' + encodeURIComponent('https://hamqth.com'));
+        const targetUrl = 'https://hamqth.com';
+        const proxyUrl = 'https://allorigins.win' + encodeURIComponent(targetUrl);
+        
+        const backupResponse = await fetch(proxyUrl);
         if (!backupResponse.ok) throw new Error(`Backup Mirror Error`);
         
         const wrapper = await backupResponse.json();
@@ -301,6 +306,7 @@ async function fetchRealSpots() {
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
+
 
 </script>
 
