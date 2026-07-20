@@ -153,7 +153,7 @@
     </footer>
 </div>
 <script>
-// 1. DYNAMIC CDN INJECTION: Instantly forces the library to mount before boot routines run
+// Dynamic library mount
 const cdnScript = document.createElement('script');
 cdnScript.src = "https://cloudflare.com";
 cdnScript.type = "text/javascript";
@@ -164,7 +164,6 @@ let maxReportedDistKm = 0;
 let maxReportedDistMi = 0;
 let modeTracker = {};
 
-// Visual metrics interface bindings
 const statusDisplay = document.getElementById('monitor-status');
 const spotsDisplay = document.getElementById('total-spots');
 const distanceDisplay = document.getElementById('max-distance');
@@ -242,7 +241,6 @@ function renderUI() {
 let client = null;
 
 cdnScript.onload = function() {
-    console.log("Paho Library downloaded and compiled natively.");
     initializeWebSocketStream();
 };
 
@@ -251,10 +249,10 @@ function initializeWebSocketStream() {
     statusDisplay.className = "status-badge status-updating";
 
     const clientId = "client-" + Math.floor(Math.random() * 100000);
-    client = new Paho.Client("mqtt.pskreporter.info", 1886, clientId);
+    // FIX: Set the path to /mqtt explicitly to fit the broker connection protocol rules
+    client = new Paho.Client("mqtt.pskreporter.info", 1886, "/mqtt", clientId);
 
     client.onConnectionLost = function(responseObject) {
-        console.warn("Connection lost. Retrying standard WebSocket tunnel setup...", responseObject.errorMessage);
         statusDisplay.innerText = "RECONNECTING";
         statusDisplay.className = "status-badge status-updating";
         setTimeout(() => { client.connect({ useSSL: true, onSuccess: onConnect }); }, 5000);
@@ -262,21 +260,30 @@ function initializeWebSocketStream() {
 
     client.onMessageArrived = function(message) {
         try {
-            const rawSpot = JSON.parse(message.payloadString);
-            if (!rawSpot) return;
+            const topicPath = message.destinationName;
+            const segments = topicPath.split('/');
+            
+            // Expected Pattern: pskr/filter/v2/{band}/{mode}/{tx_call}/{rx_call}/{tx_grid}/{rx_grid}/{tx_dxcc}/{rx_dxcc}
+            if (segments.length < 9) return;
 
-            // RESOLUTION: Mapped matching payload keys explicitly to capture pskreporter's stream formatting
-            const txGrid = rawSpot.tx_grid || rawSpot.senderLocator || '';
-            const rxGrid = rawSpot.rx_grid || rawSpot.receiverLocator || '';
-            if (!txGrid || !rxGrid) return; 
+            // FIX: Applied direct numeric array indices to safely extract the string parameters
+            const band = segments[3];
+            const mode = segments[4].toUpperCase();
+            const txCall = segments[5];
+            const rxCall = segments[6];
+            const txGrid = segments[7];
+            const rxGrid = segments[8];
 
-            const txCall = rawSpot.tx_call || rawSpot.senderCallsign || 'Unknown';
-            const rxCall = rawSpot.rx_call || rawSpot.receiverCallsign || 'Unknown';
-            const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
-            const mode = (rawSpot.mode || 'FT8').trim();
-            const snr = rawSpot.snr || rawSpot.sNR ? `${rawSpot.snr || rawSpot.sNR} dB` : 'Log';
+            let snr = "Log";
+            let freq = band === "2m" ? "144.1740" : "14.0740"; 
+            
+            try {
+                const payloadObj = JSON.parse(message.payloadString);
+                if (payloadObj.sNR || payloadObj.snr) snr = `${payloadObj.sNR || payloadObj.snr} dB`;
+                if (payloadObj.frequency) freq = (parseInt(payloadObj.frequency) / 1000000).toFixed(4);
+            } catch(e) {}
+
             const currentTime = new Date().toISOString().slice(11, 19);
-
             const dist = calculateDistance(txGrid, rxGrid);
             const alertClass = getDistanceClass(dist.mi);
 
@@ -296,24 +303,24 @@ function initializeWebSocketStream() {
             renderUI();
 
         } catch (err) {
-            console.error("Payload tracking error:", err);
+            console.error("Stream parsing error:", err);
         }
     };
 
     function onConnect() {
-        console.log("Connected to live PSK Reporter stream cluster network.");
+        console.log("Stream synchronized locks complete.");
         statusDisplay.innerText = "ONLINE";
         statusDisplay.className = "status-badge status-online";
         
-        // Subscribing to the official v2 data stream topic pattern
-        client.subscribe("pskr/filter/v2/20m/+/+/+/+/+/+/+");
+        // Connect to the high-traffic 20m shortwave band first to verify instant logging populates!
+        client.subscribe("pskr/filter/v2/20m/+/+/+/+/+/+/+/+");
     }
 
     client.connect({ 
         useSSL: true, 
         onSuccess: onConnect,
         onFailure: function(err) {
-            console.error("Secure data stream failed to connect:", err);
+            console.error("Connection failed details:", err);
             statusDisplay.innerText = "CONN ERROR";
             statusDisplay.className = "status-badge status-error";
         }
@@ -322,4 +329,5 @@ function initializeWebSocketStream() {
 </script>
 </body>
 </html>
+
 
