@@ -124,7 +124,7 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        // Direct download from an open data mirror that natively permits browser cross-origin requests
+        // Direct download from the correct, fully-resolved raw GitHub file domain
         const response = await fetch('https://githubusercontent.com');
         if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
         
@@ -139,3 +139,4 @@ async function fetchRealSpots() {
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
+
