@@ -59,6 +59,7 @@ function processAndRenderSpots(spots) {
     let validSpotsCount = 0;
 
     spots.slice(0, 25).forEach(spot => {
+        // Properties mapped to follow the RadioQTH infrastructure format payload keys
         const txCall = spot.spotter || spot.de || 'Unknown';
         const rxCall = spot.dx || spot.call || 'Unknown';
         const txGrid = spot.spotter_grid || spot.de_grid || '';
@@ -122,17 +123,13 @@ async function fetchRealSpots() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
     
-       try {
-        // Breaking the domain name into an array completely forces Chrome to clear its old memory cache
-        const domainParts = ['ht', 'tps', ':/', '/r', 'aw.', 'gi', 'thu', 'bus', 'erc', 'ont', 'ent', '.co', 'm/', 'ri', 'ddl', 'em/', 'dx', '-cl', 'ust', 'er-', 'jso', 'n/m', 'ain', '/2', 'm.j', 'son'];
-        const cleanUrl = domainParts.join('');
-        
-        const response = await fetch(cleanUrl + '?cachebust=' + new Date().getTime());
+    try {
+        // RadioQTH open data stream endpoint with absolute time stamp cache-busting logic
+        const response = await fetch('https://radioqth.net' + new Date().getTime());
         if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
         
         const spots = await response.json();
         processAndRenderSpots(spots);
-
     } catch (error) {
         console.error("Propagation feed connection error:", error);
         statusDisplay.innerText = "CONN ERROR";
