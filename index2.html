@@ -153,16 +153,12 @@
     </footer>
 </div>
 <script>
-// Dynamic library mount
-const cdnScript = document.createElement('script');
-cdnScript.src = "https://cloudflare.com";
-cdnScript.type = "text/javascript";
-document.head.appendChild(cdnScript);
-
+const UPDATE_INTERVAL = 30000; 
 let activeSpots = [];
 let maxReportedDistKm = 0;
 let maxReportedDistMi = 0;
 let modeTracker = {};
+let ws = null;
 
 const statusDisplay = document.getElementById('monitor-status');
 const spotsDisplay = document.getElementById('total-spots');
@@ -238,97 +234,105 @@ function renderUI() {
     modeDisplay.innerText = primaryMode;
 }
 
-let client = null;
-
-cdnScript.onload = function() {
-    initializeWebSocketStream();
-};
-
-function initializeWebSocketStream() {
+function connectToRadioStream() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
 
-    const clientId = "client-" + Math.floor(Math.random() * 100000);
-    // RESOLUTION: Provided an explicit blank server root path to match the network broker protocol rules
-    client = new Paho.Client("mqtt.pskreporter.info", 1886, "", clientId);
+    // Establish a direct connection using Chrome's native WebSockets layer
+    ws = new WebSocket("wss://mqtt.pskreporter.info:1886/");
 
-    client.onConnectionLost = function(responseObject) {
-        statusDisplay.innerText = "RECONNECTING";
-        statusDisplay.className = "status-badge status-updating";
-        setTimeout(() => { client.connect({ useSSL: true, onSuccess: onConnect }); }, 5000);
-    };
-
-    client.onMessageArrived = function(message) {
-        try {
-            const topicPath = message.destinationName;
-            const segments = topicPath.split('/');
-            
-            // Expected Pattern: pskr/filter/v2/{band}/{mode}/{tx_call}/{rx_call}/{tx_grid}/{rx_grid}/{tx_dxcc}/{rx_dxcc}
-            if (segments.length < 8) return;
-
-            // RESOLUTION: Added proper array index placement to isolate word fragments and stop code execution freezes
-            const band = segments[3];
-            const mode = segments[4] ? segments[4].toUpperCase() : 'FT8';
-            const txCall = segments[5] || 'Unknown';
-            const rxCall = segments[6] || 'Unknown';
-            const txGrid = segments[7] || '';
-            const rxGrid = segments[8] || '';
-
-            if (!txGrid || !rxGrid) return; 
-
-            let snr = "Log";
-            let freq = band === "2m" ? "144.1740" : "14.0740"; 
-            
-            try {
-                const payloadObj = JSON.parse(message.payloadString);
-                if (payloadObj.sNR || payloadObj.snr) snr = `${payloadObj.sNR || payloadObj.snr} dB`;
-                if (payloadObj.frequency) freq = (parseInt(payloadObj.frequency) / 1000000).toFixed(4);
-            } catch(e) {}
-
-            const currentTime = new Date().toISOString().slice(11, 19);
-            const dist = calculateDistance(txGrid, rxGrid);
-            const alertClass = getDistanceClass(dist.mi);
-
-            if (dist.km > maxReportedDistKm && dist.km < 20000) {
-                maxReportedDistKm = dist.km;
-                maxReportedDistMi = dist.mi;
-            }
-
-            modeTracker[mode] = (modeTracker[mode] || 0) + 1;
-
-            activeSpots.unshift({
-                time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
-                freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
-            });
-            
-            if (activeSpots.length > 25) activeSpots.pop();
-            renderUI();
-
-        } catch (err) {
-            console.error("Stream payload separation parsing crash:", err);
-        }
-    };
-
-    function onConnect() {
-        console.log("Stream synchronization locks complete.");
+    ws.onopen = function() {
+        console.log("Native WebSocket channel open.");
         statusDisplay.innerText = "ONLINE";
         statusDisplay.className = "status-badge status-online";
-        
-        // Connect to the high-traffic 20m HF band first to verify instant layout population!
-        client.subscribe("pskr/filter/v2/2m/+/+/+/+/+/+/+/+");
-    }
 
-    client.connect({ 
-        useSSL: true, 
-        onSuccess: onConnect,
-        onFailure: function(err) {
-            console.error("Connection failed details:", err);
-            statusDisplay.innerText = "CONN ERROR";
-            statusDisplay.className = "status-badge status-error";
-        }
-    });
+        // Raw MQTT protocol connect frame to establish the session link
+        const connectPacket = new Uint8Array([
+            0x10, 0x12, 0x00, 0x04, 0x4D, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3C, 0x00, 0x06, 0x64, 0x61, 0x73, 0x68, 0x62, 0x64
+        ]);
+        ws.send(connectPacket);
+
+        // Subscribe payload packet filtering the 20m high-traffic shortwave spectrum
+        setTimeout(() => {
+            const subPacket = new Uint8Array([
+                0x82, 0x22, 0x00, 0x01, 0x00, 0x1D, 0x70, 0x73, 0x6B, 0x72, 0x2F, 0x66, 0x69, 0x6C, 0x74, 0x65, 
+                0x72, 0x2F, 0x76, 0x32, 0x2F, 0x32, 0x30, 0x6D, 0x2F, 0x2B, 0x2F, 0x2B, 0x2F, 0x2B, 0x2F, 0x2B, 
+                0x2F, 0x2B, 0x2F, 0x2B, 0x2F, 0x2B, 0x00
+            ]);
+            ws.send(subPacket);
+            console.log("Subscription payload submitted successfully.");
+        }, 500);
+    };
+
+    ws.onmessage = function(event) {
+        try {
+            // Raw binary stream unpacker
+            if (event.data instanceof Blob) {
+                event.data.text().then(text => processIncomingText(text));
+            } else {
+                processIncomingText(event.data);
+            }
+        } catch (e) {}
+    };
+
+    ws.onerror = function(err) {
+        console.error("Socket error state detected:", err);
+        statusDisplay.innerText = "CONN ERROR";
+        statusDisplay.className = "status-badge status-error";
+    };
+
+    ws.onclose = function() {
+        console.warn("Socket channel severed. Initiating backup cycle...");
+        statusDisplay.innerText = "RECONNECTING";
+        statusDisplay.className = "status-badge status-updating";
+        setTimeout(connectToRadioStream, 5000);
+    };
 }
+
+function processIncomingText(payload) {
+    // Locate text markers within the stream packet boundaries
+    const jsonStart = payload.indexOf('{"');
+    if (jsonStart === -1) return;
+    
+    try {
+        const cleanJson = payload.substring(jsonStart);
+        const rawSpot = JSON.parse(cleanJson);
+        if (!rawSpot) return;
+
+        const txGrid = rawSpot.tx_grid || rawSpot.senderLocator || '';
+        const rxGrid = rawSpot.rx_grid || rawSpot.receiverLocator || '';
+        if (!txGrid || !rxGrid) return; 
+
+        const txCall = rawSpot.tx_call || rawSpot.senderCallsign || 'Unknown';
+        const rxCall = rawSpot.rx_call || rawSpot.receiverCallsign || 'Unknown';
+        const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
+        const mode = (rawSpot.mode || 'FT8').trim();
+        const snr = rawSpot.snr || rawSpot.sNR ? `${rawSpot.snr || rawSpot.sNR} dB` : 'Log';
+        const currentTime = new Date().toISOString().slice(11, 19);
+
+        const dist = calculateDistance(txGrid, rxGrid);
+        const alertClass = getDistanceClass(dist.mi);
+
+        if (dist.km > maxReportedDistKm && dist.km < 20000) {
+            maxReportedDistKm = dist.km;
+            maxReportedDistMi = dist.mi;
+        }
+
+        modeTracker[mode] = (modeTracker[mode] || 0) + 1;
+
+        activeSpots.unshift({
+            time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
+            freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
+        });
+        
+        if (activeSpots.length > 25) activeSpots.pop();
+        renderUI();
+
+    } catch (err) {}
+}
+
+// Initialize connection automatically
+connectToRadioStream();
 </script>
 </body>
 </html>
-
