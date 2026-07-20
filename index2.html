@@ -266,38 +266,17 @@ async function fetchRealSpots() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
     
-    // Route 1: Try Spothole Aggregator via Proxy
     try {
-        const primaryTarget = 'https://spothole.app';
-        const primaryProxy = 'https://allorigins.win' + encodeURIComponent(primaryTarget);
-        
-        const response = await fetch(primaryProxy);
-        if (!response.ok) throw new Error(`Primary path dropped`);
+        const response = await fetch('https://allorigins.win');
+        if (!response.ok) throw new Error(`Primary Error`);
         
         const wrapper = await response.json();
         const data = wrapper.contents ? JSON.parse(wrapper.contents) : {};
         const spots = data.spots || [];
         
         processAndRenderSpots(spots);
-        return; // Success! Exit out of function safely
-    } catch (e) {
-        console.warn("Primary path rate-limited. Routing to backup infrastructure...");
-    }
-
-    // Route 2: Try Backup HamQTH Infrastructure via Proxy
-    try {
-        const backupTarget = 'https://hamqth.com';
-        const backupProxy = 'https://allorigins.win' + encodeURIComponent(backupTarget);
-        
-        const backupResponse = await fetch(backupProxy);
-        if (!backupResponse.ok) throw new Error(`Backup database offline`);
-        
-        const wrapper = await backupResponse.json();
-        const spots = wrapper.contents ? JSON.parse(wrapper.contents) : [];
-        
-        processAndRenderSpots(spots);
     } catch (error) {
-        console.error("All data connections exhausted:", error);
+        console.error("Data connections exhausted:", error);
         statusDisplay.innerText = "CONN ERROR";
         statusDisplay.className = "status-badge status-error";
     }
@@ -305,7 +284,6 @@ async function fetchRealSpots() {
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
-
 </script>
 </body>
 </html>
