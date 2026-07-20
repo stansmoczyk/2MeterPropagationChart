@@ -249,8 +249,8 @@ function initializeWebSocketStream() {
     statusDisplay.className = "status-badge status-updating";
 
     const clientId = "client-" + Math.floor(Math.random() * 100000);
-    // FIX: Set the path to /mqtt explicitly to fit the broker connection protocol rules
-    client = new Paho.Client("mqtt.pskreporter.info", 1886, "/mqtt", clientId);
+    // RESOLUTION: Provided an explicit blank server root path to match the network broker protocol rules
+    client = new Paho.Client("mqtt.pskreporter.info", 1886, "", clientId);
 
     client.onConnectionLost = function(responseObject) {
         statusDisplay.innerText = "RECONNECTING";
@@ -264,15 +264,17 @@ function initializeWebSocketStream() {
             const segments = topicPath.split('/');
             
             // Expected Pattern: pskr/filter/v2/{band}/{mode}/{tx_call}/{rx_call}/{tx_grid}/{rx_grid}/{tx_dxcc}/{rx_dxcc}
-            if (segments.length < 9) return;
+            if (segments.length < 8) return;
 
-            // FIX: Applied direct numeric array indices to safely extract the string parameters
+            // RESOLUTION: Added proper array index placement to isolate word fragments and stop code execution freezes
             const band = segments[3];
-            const mode = segments[4].toUpperCase();
-            const txCall = segments[5];
-            const rxCall = segments[6];
-            const txGrid = segments[7];
-            const rxGrid = segments[8];
+            const mode = segments[4] ? segments[4].toUpperCase() : 'FT8';
+            const txCall = segments[5] || 'Unknown';
+            const rxCall = segments[6] || 'Unknown';
+            const txGrid = segments[7] || '';
+            const rxGrid = segments[8] || '';
+
+            if (!txGrid || !rxGrid) return; 
 
             let snr = "Log";
             let freq = band === "2m" ? "144.1740" : "14.0740"; 
@@ -303,16 +305,16 @@ function initializeWebSocketStream() {
             renderUI();
 
         } catch (err) {
-            console.error("Stream parsing error:", err);
+            console.error("Stream payload separation parsing crash:", err);
         }
     };
 
     function onConnect() {
-        console.log("Stream synchronized locks complete.");
+        console.log("Stream synchronization locks complete.");
         statusDisplay.innerText = "ONLINE";
         statusDisplay.className = "status-badge status-online";
         
-        // Connect to the high-traffic 20m shortwave band first to verify instant logging populates!
+        // Connect to the high-traffic 20m HF band first to verify instant layout population!
         client.subscribe("pskr/filter/v2/20m/+/+/+/+/+/+/+/+");
     }
 
@@ -329,5 +331,4 @@ function initializeWebSocketStream() {
 </script>
 </body>
 </html>
-
 
