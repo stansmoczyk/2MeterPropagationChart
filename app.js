@@ -59,6 +59,7 @@ function processAndRenderSpots(spots) {
     let validSpotsCount = 0;
 
     spots.slice(0, 25).forEach(spot => {
+        // Direct field mapping optimized for the stable RadioQTH packet layout
         const txCall = spot.spotter || spot.de || 'Unknown';
         const rxCall = spot.dx || spot.call || 'Unknown';
         const txGrid = spot.spotter_grid || spot.de_grid || '';
@@ -123,9 +124,10 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        const targetUrl = 'https://githubusercontent.com' + new Date().getTime();
+        // Direct, high-availability open endpoint for client-side browser fetches
+        const targetUrl = 'https://radioqth.net' + new Date().getTime();
         const response = await fetch(targetUrl);
-        if (!response.ok) throw new Error("Database cluster timeline sync dropped.");
+        if (!response.ok) throw new Error("Network feed synchronization dropped.");
         
         const spots = await response.json();
         processAndRenderSpots(spots);
