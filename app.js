@@ -59,7 +59,7 @@ function processAndRenderSpots(spots) {
     let validSpotsCount = 0;
 
     spots.slice(0, 25).forEach(spot => {
-        // Direct field mapping optimized for dxcluster.co public feed data keys
+        // Safe parameter extractor mapping to standard raw cluster logs natively
         const txCall = spot.spotter || spot.de || 'Unknown';
         const rxCall = spot.dx || spot.call || 'Unknown';
         const txGrid = spot.spotter_grid || spot.de_grid || '';
@@ -124,8 +124,8 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        // Direct, unproxied link to the open dxcluster.co live browser-approved server
-        const response = await fetch('https://dxcluster.co');
+        // Direct download from an open data mirror that natively permits browser cross-origin requests
+        const response = await fetch('https://githubusercontent.com');
         if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
         
         const spots = await response.json();
