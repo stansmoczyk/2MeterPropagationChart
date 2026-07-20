@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live 2-Meter VHF Propagation Monitor</title>
+    <style>
+        :root {
+            --bg-main: #09090b;
+            --bg-card: #18181b;
+            --border: #27272a;
+            --text-main: #f4f4f5;
+            --text-muted: #a1a1aa;
+        }
+        body {
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        h1 { margin: 0; font-size: 1.5rem; }
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+        .status-online { background: #064e3b; color: #34d399; }
+        .status-updating { background: #78350f; color: #fbbf24; }
+        .status-error { background: #7f1d1d; color: #f87171; }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .card-title { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 5px; }
+        .card-value { font-size: 1.4rem; font-weight: bold; }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th { background: #202024; color: var(--text-muted); font-size: 0.85rem; }
+        tr:last-child td { border-bottom: none; }
+        .badge {
+            background: #27272a;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+        
+        .dist-short { color: #f4f4f5; }
+        .dist-medium { color: #fbbf24; font-weight: 500; }
+        .dist-long { color: #f97316; font-weight: bold; }
+        .dist-extreme { color: #ef4444; font-weight: bold; text-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border);
+            margin-top: 40px;
+            line-height: 1.5;
+        }
+        footer a { color: #3b82f6; text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div>
+            <h1>2-Meter VHF Propagation Monitor</h1>
+            <div style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Real-Time Operational Activity Data (144 MHz Band)</div>
+        </div>
+        <div id="monitor-status" class="status-badge status-updating">CONNECTING</div>
+    </header>
+
+    <div class="metrics-grid">
+        <div class="card">
+            <div class="card-title">Active Logged Spots</div>
+            <div id="total-spots" class="card-value">0</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Max Observed Distance</div>
+            <div id="max-distance" class="card-value">0 mi / 0 km</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Top Active Mode</div>
+            <div id="top-mode" class="card-value">--</div>
+        </div>
+    </div>
+
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time (UTC)</th>
+                    <th>TX Station</th>
+                    <th>RX Station</th>
+                    <th>Path (Grid Coordinates)</th>
+                    <th>Frequency</th>
+                    <th>Distance</th>
+                    <th>Signal Details</th>
+                </tr>
+            </thead>
+            <tbody id="data-table-body">
+                <tr>
+                    <td colspan="7" style="text-align: center; color: var(--text-muted);">Waiting for active feed updates...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <footer>
+        <p>ℹ️ <strong>Data Disclosure:</strong> Operational data displayed on this dashboard is pulled dynamically via live data streams from the open <a href="https://hamqth.com" target="_blank">HamQTH DX Cluster Network API</a>.</p>
+        <p>Distances are calculated client-side using the great-circle haversine formula based on logged Maidenhead locator attributes.</p>
+    </footer>
+</div>
+
+<script>
+const UPDATE_INTERVAL = 30000; 
+let maxReportedDistKm = 0;
+let maxReportedDistMi = 0;
+
+const statusDisplay = document.getElementById('monitor-status');
+const spotsDisplay = document.getElementById('total-spots');
+const distanceDisplay = document.getElementById('max-distance');
+const modeDisplay = document.getElementById('top-mode');
+const tableContainer = document.getElementById('data-table-body');
+
+function gridToLatLon(grid) {
+    if (!grid || grid.length < 4) return { lat: 0, lon: 0 };
+    const cleanGrid = grid.toUpperCase();
+    const lonField = cleanGrid.charCodeAt(0) - 65;
+    const latField = cleanGrid.charCodeAt(1) - 65;
+    const lonSquare = parseInt(cleanGrid.charAt(2));
+    const latSquare = parseInt(cleanGrid.charAt(3));
+    
+    const lon = (lonField * 20) - 180 + (lonSquare * 2) + 1;
+    const lat = (latField * 10) - 90 + latSquare + 0.5;
+    return { lat: lat, lon: lon };
+}
+
+function calculateDistance(grid1, grid2) {
+    if (!grid1 || !grid2) return { km: 0, mi: 0 };
+    const coord1 = gridToLatLon(grid1);
+    const coord2 = gridToLatLon(grid2);
+    const R_km = 6371;
+    const R_mi = 3959;
+    const dLat = (coord2.lat - coord1.lat) * Math.PI / 180;
+    const dLon = (coord2.lon - coord1.lon) * Math.PI / 180;
+    const lat1Rad = coord1.lat * Math.PI / 180;
+    const lat2Rad = coord2.lat * Math.PI / 180;
+    
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + 
+              Math.sin(dLon/2) * Math.sin(dLon/2) * Math.cos(lat1Rad) * Math.cos(lat2Rad);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return { km: Math.round(R_km * c), mi: Math.round(R_mi * c) };
+}
+
+function getDistanceClass(miles) {
+    if (miles <= 200) return 'dist-short';
+    if (miles <= 500) return 'dist-medium';
+    if (miles <= 1200) return 'dist-long';
+    return 'dist-extreme'; 
+}
+
+async function fetchRealSpots() {
+    statusDisplay.innerText = "UPDATING";
+    statusDisplay.className = "status-badge status-updating";
+    
+    try {
+        // Direct, unproxied link straight to the real HamQTH database feed
+        const response = await fetch('https://hamqth.com');
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        
+        const spots = await response.json();
+        
+        if (!spots || spots.length === 0) {
+            tableContainer.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No live 2m spots reported on the cluster in the last hour. Monitoring band...</td></tr>`;
+            spotsDisplay.innerText = "0";
+            statusDisplay.innerText = "ONLINE";
+            statusDisplay.className = "status-badge status-online";
+            return;
+        }
+
+        let modeTracker = {};
+        let htmlRows = "";
+
+        spots.slice(0, 25).forEach(spot => {
+            const txCall = spot.spotter || 'Unknown';
+            const rxCall = spot.dx || 'Unknown';
+            const txGrid = spot.spotter_grid || '';
+            const rxGrid = spot.dx_grid || '';
+            const freq = spot.frequency ? parseFloat(spot.frequency).toFixed(4) : '144.0000';
+            const mode = spot.mode || 'VHF';
+            const snr = spot.db ? `${spot.db} dB` : 'Log';
+            
+            let displayTime = "Recent";
+            if (spot.time) {
+                displayTime = spot.time.slice(0, 8);
+            }
+
+            const dist = calculateDistance(txGrid, rxGrid);
+            const colorClass = getDistanceClass(dist.mi);
+
+            if (dist.km > maxReportedDistKm && dist.km < 20000) {
+                maxReportedDistKm = dist.km;
+                maxReportedDistMi = dist.mi;
+            }
+
+            modeTracker[mode] = (modeTracker[mode] || 0) + 1;
+
+            htmlRows += `
+                <tr>
+                    <td>${displayTime}</td>
+                    <td><strong>${txCall}</strong></td>
+                    <td>${rxCall}</td>
+                    <td>
+                        ${txGrid ? `<span class="badge">${txGrid}</span>` : '<span style="color:var(--text-muted)">--</span>'} 
+                        → 
+                        ${rxGrid ? `<span class="badge">${rxGrid}</span>` : '<span style="color:var(--text-muted)">--</span>'}
+                    </td>
+                    <td>${freq} MHz</td>
+                    <td>
+                        <span class="${colorClass}">${dist.mi} mi</span> 
+                        <span style="color: #71717a; font-size: 0.8rem;">(${dist.km} km)</span>
+                    </td>
+                    <td style="color: #10b981;">${snr} (${mode.toUpperCase()})</td>
+                </tr>
+            `;
+        });
+
+        const primaryMode = Object.keys(modeTracker).length > 0 
+            ? Object.keys(modeTracker).reduce((x, y) => modeTracker[x] > modeTracker[y] ? x : y).toUpperCase()
+            : 'VHF';
+
+        tableContainer.innerHTML = htmlRows;
+        spotsDisplay.innerText = spots.length;
+        distanceDisplay.innerText = maxReportedDistKm > 0 ? `${maxReportedDistMi} mi / ${maxReportedDistKm} km` : 'Calculating...';
+        modeDisplay.innerText = primaryMode;
+        
+        statusDisplay.innerText = "ONLINE";
+        statusDisplay.className = "status-badge status-online";
+
+    } catch (error) {
+        console.error("Connection Failed:", error);
+        statusDisplay.innerText = "CONN ERROR";
+        statusDisplay.className = "status-badge status-error";
+    }
+}
+
+
+fetchRealSpots();
+setInterval(fetchRealSpots, UPDATE_INTERVAL);
+
+</script>
+
+</body>
+</html>
