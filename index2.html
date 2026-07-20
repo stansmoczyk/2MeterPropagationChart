@@ -199,41 +199,6 @@ function getDistanceClass(miles) {
     return 'dist-extreme'; 
 }
 
-async function fetchRealSpots() {
-    statusDisplay.innerText = "UPDATING";
-    statusDisplay.className = "status-badge status-updating";
-    
-    // Route 1: Try Spothole's Secure Production Database
-    try {
-        const response = await fetch('https://spothole.app');
-        if (!response.ok) throw new Error(`Spothole Error Status: ${response.status}`);
-        
-        const data = await response.json();
-        const spots = data.spots || [];
-        
-        processAndRenderSpots(spots);
-        return; // Success! Exit out of the function safely
-    } catch (e) {
-        console.warn("Primary database rate-limited or offline. Switching to backup server...");
-    }
-
-    // Route 2: Backup Server (Using an alternative secure mirror)
-    try {
-        const backupResponse = await fetch('https://allorigins.win' + encodeURIComponent('https://hamqth.com'));
-        if (!backupResponse.ok) throw new Error(`Backup Mirror Error`);
-        
-        const wrapper = await backupResponse.json();
-        const spots = wrapper.contents ? JSON.parse(wrapper.contents) : [];
-        
-        processAndRenderSpots(spots);
-    } catch (error) {
-        console.error("All data connections exhausted:", error);
-        statusDisplay.innerText = "CONN ERROR";
-        statusDisplay.className = "status-badge status-error";
-    }
-}
-
-// HELPER FUNCTION: Processes and draws the raw array spots to the UI layout
 function processAndRenderSpots(spots) {
     if (!spots || spots.length === 0) {
         tableContainer.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No live 2m spots reported on the cluster in the last hour. Monitoring band...</td></tr>`;
@@ -247,7 +212,6 @@ function processAndRenderSpots(spots) {
     let htmlRows = "";
 
     spots.slice(0, 25).forEach(spot => {
-        // Handle variations between Spothole and HamQTH property naming structures
         const txCall = spot.spotter || spot.tx_call || 'Unknown';
         const rxCall = spot.dx || spot.rx_call || 'Unknown';
         const txGrid = spot.spotter_grid || spot.tx_locator || spot.tx_grid || '';
@@ -301,13 +265,39 @@ function processAndRenderSpots(spots) {
     
     statusDisplay.innerText = "ONLINE";
     statusDisplay.className = "status-badge status-online";
-}catch (error) {
-        console.error("Connection Failed:", error);
+}
+
+async function fetchRealSpots() {
+    statusDisplay.innerText = "UPDATING";
+    statusDisplay.className = "status-badge status-updating";
+    
+    try {
+        const response = await fetch('https://spothole.app');
+        if (!response.ok) throw new Error(`Primary Error Status: ${response.status}`);
+        
+        const data = await response.json();
+        const spots = data.spots || [];
+        
+        processAndRenderSpots(spots);
+        return; 
+    } catch (e) {
+        console.warn("Primary database rate-limited or offline. Switching to backup server...");
+    }
+
+    try {
+        const backupResponse = await fetch('https://allorigins.win' + encodeURIComponent('https://hamqth.com'));
+        if (!backupResponse.ok) throw new Error(`Backup Mirror Error`);
+        
+        const wrapper = await backupResponse.json();
+        const spots = wrapper.contents ? JSON.parse(wrapper.contents) : [];
+        
+        processAndRenderSpots(spots);
+    } catch (error) {
+        console.error("All data connections exhausted:", error);
         statusDisplay.innerText = "CONN ERROR";
         statusDisplay.className = "status-badge status-error";
     }
 }
-
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
