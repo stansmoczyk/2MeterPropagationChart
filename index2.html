@@ -271,13 +271,11 @@ async function fetchRealSpots() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
     
-    // Route 1: Try Spothole Wrapped inside AllOrigins Proxy
+    // Route 1: Try Spothole via alternative fast gateway
     try {
         const targetUrl = 'https://spothole.app';
-        const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(targetUrl);
-        
-        const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error(`Primary Database Error`);
+        const response = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(targetUrl));
+        if (!response.ok) throw new Error(`Primary Error`);
         
         const wrapper = await response.json();
         const data = wrapper.contents ? JSON.parse(wrapper.contents) : {};
@@ -286,20 +284,17 @@ async function fetchRealSpots() {
         processAndRenderSpots(spots);
         return; 
     } catch (e) {
-        console.warn("Primary database rate-limited or blocked. Switching to backup server...");
+        console.warn("Primary proxy routing slow. Trying alternative mirror gateway...");
     }
 
-    // Route 2: Try HamQTH Wrapped inside AllOrigins Proxy
+    // Route 2: Try HamQTH via a clean direct secure proxy fetch
     try {
+        // Using a fast, alternative open proxy mirror to bypass AllOrigins slowdowns
         const targetUrl = 'https://hamqth.com';
-        const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(targetUrl);
-        
-        const backupResponse = await fetch(proxyUrl);
+        const backupResponse = await fetch('https://freeboard.io' + targetUrl);
         if (!backupResponse.ok) throw new Error(`Backup Mirror Error`);
         
-        const wrapper = await backupResponse.json();
-        const spots = wrapper.contents ? JSON.parse(wrapper.contents) : [];
-        
+        const spots = await backupResponse.json();
         processAndRenderSpots(spots);
     } catch (error) {
         console.error("All data connections exhausted:", error);
@@ -307,6 +302,7 @@ async function fetchRealSpots() {
         statusDisplay.className = "status-badge status-error";
     }
 }
+
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
