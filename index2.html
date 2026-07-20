@@ -155,7 +155,7 @@
 <script>
 // 1. DYNAMIC CDN INJECTION: Instantly forces the library to mount before boot routines run
 const cdnScript = document.createElement('script');
-cdnScript.src = "https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js";
+cdnScript.src = "https://cloudflare.com";
 cdnScript.type = "text/javascript";
 document.head.appendChild(cdnScript);
 
@@ -241,7 +241,6 @@ function renderUI() {
 
 let client = null;
 
-// Runs the initialization sequence only when the browser confirms the script is ready
 cdnScript.onload = function() {
     console.log("Paho Library downloaded and compiled natively.");
     initializeWebSocketStream();
@@ -252,8 +251,6 @@ function initializeWebSocketStream() {
     statusDisplay.className = "status-badge status-updating";
 
     const clientId = "client-" + Math.floor(Math.random() * 100000);
-    
-    // RESOLUTION: Uses the correct constructor syntax to completely prevent the ReferenceError
     client = new Paho.Client("mqtt.pskreporter.info", 1886, clientId);
 
     client.onConnectionLost = function(responseObject) {
@@ -268,15 +265,16 @@ function initializeWebSocketStream() {
             const rawSpot = JSON.parse(message.payloadString);
             if (!rawSpot) return;
 
-            const txGrid = rawSpot.senderLocator || rawSpot.tx_grid || '';
-            const rxGrid = rawSpot.receiverLocator || rawSpot.rx_grid || '';
+            // RESOLUTION: Mapped matching payload keys explicitly to capture pskreporter's stream formatting
+            const txGrid = rawSpot.tx_grid || rawSpot.senderLocator || '';
+            const rxGrid = rawSpot.rx_grid || rawSpot.receiverLocator || '';
             if (!txGrid || !rxGrid) return; 
 
-            const txCall = rawSpot.senderCallsign || 'Unknown';
-            const rxCall = rawSpot.receiverCallsign || 'Unknown';
+            const txCall = rawSpot.tx_call || rawSpot.senderCallsign || 'Unknown';
+            const rxCall = rawSpot.rx_call || rawSpot.receiverCallsign || 'Unknown';
             const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
             const mode = (rawSpot.mode || 'FT8').trim();
-            const snr = rawSpot.sNR ? `${rawSpot.sNR} dB` : 'Log';
+            const snr = rawSpot.snr || rawSpot.sNR ? `${rawSpot.snr || rawSpot.sNR} dB` : 'Log';
             const currentTime = new Date().toISOString().slice(11, 19);
 
             const dist = calculateDistance(txGrid, rxGrid);
@@ -306,6 +304,8 @@ function initializeWebSocketStream() {
         console.log("Connected to live PSK Reporter stream cluster network.");
         statusDisplay.innerText = "ONLINE";
         statusDisplay.className = "status-badge status-online";
+        
+        // Subscribing to the official v2 data stream topic pattern
         client.subscribe("pskr/filter/v2/2m/+/+/+/+/+/+/+");
     }
 
