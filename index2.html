@@ -301,8 +301,7 @@ function processAndRenderSpots(spots) {
     
     statusDisplay.innerText = "ONLINE";
     statusDisplay.className = "status-badge status-online";
-}
- catch (error) {
+}catch (error) {
         console.error("Connection Failed:", error);
         statusDisplay.innerText = "CONN ERROR";
         statusDisplay.className = "status-badge status-error";
