@@ -124,14 +124,12 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        // Direct, high-availability open endpoint for client-side browser fetches
-        const targetUrl = 'https://radioqth.net' + new Date().getTime();
-        const response = await fetch(targetUrl);
-        if (!response.ok) throw new Error("Network feed synchronization dropped.");
+        // Direct, unproxied link to the open DXHeat live data server
+        const response = await fetch('https://dxheat.com');
+        if (!response.ok) throw new Error(`Server Error`);
         
         const spots = await response.json();
         processAndRenderSpots(spots);
-
     } catch (error) {
         console.error("Propagation feed connection error:", error);
         statusDisplay.innerText = "CONN ERROR";
@@ -141,3 +139,4 @@ async function fetchRealSpots() {
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
+
