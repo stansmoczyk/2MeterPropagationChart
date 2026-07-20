@@ -59,7 +59,7 @@ function processAndRenderSpots(spots) {
     let validSpotsCount = 0;
 
     spots.slice(0, 25).forEach(spot => {
-        // Direct field mapping optimized for the stable RadioQTH packet layout
+        // Direct field mapping optimized for dxcluster.co public feed data keys
         const txCall = spot.spotter || spot.de || 'Unknown';
         const rxCall = spot.dx || spot.call || 'Unknown';
         const txGrid = spot.spotter_grid || spot.de_grid || '';
@@ -124,9 +124,9 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        // Direct, unproxied link to the open DXHeat live data server
-        const response = await fetch('https://dxheat.com');
-        if (!response.ok) throw new Error(`Server Error`);
+        // Direct, unproxied link to the open dxcluster.co live browser-approved server
+        const response = await fetch('https://dxcluster.co');
+        if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
         
         const spots = await response.json();
         processAndRenderSpots(spots);
@@ -139,4 +139,3 @@ async function fetchRealSpots() {
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
-
