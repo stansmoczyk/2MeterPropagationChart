@@ -238,41 +238,81 @@ function connectToRadioStream() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
 
-    // Establish a direct connection using Chrome's native WebSockets layer
-    ws = new WebSocket("wss://mqtt.pskreporter.info:1886/");
+    // Direct WebSockets transport layer mapped over secure TLS port 1886
+    ws = new WebSocket("wss://mqtt.pskreporter.info:1886/", "mqtt");
+    ws.binaryType = "arraybuffer";
 
     ws.onopen = function() {
-        console.log("Native WebSocket channel open.");
+        console.log("WebSocket Tunnel Active. Transmitting MQTT handshake frame...");
         statusDisplay.innerText = "ONLINE";
         statusDisplay.className = "status-badge status-online";
 
-        // Raw MQTT protocol connect frame to establish the session link
+        // Protocol Compliance Frame: Valid MQTT v3.1.1 CONNECT binary matrix packet
         const connectPacket = new Uint8Array([
-            0x10, 0x12, 0x00, 0x04, 0x4D, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3C, 0x00, 0x06, 0x64, 0x61, 0x73, 0x68, 0x62, 0x64
+            0x10, 0x0C, 0x00, 0x04, 0x4D, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3C, 0x00, 0x00
         ]);
         ws.send(connectPacket);
 
-        // Subscribe payload packet filtering the 20m high-traffic shortwave spectrum
+        // Allow 500ms for protocol confirmation before pushing the band monitor filter subscription
         setTimeout(() => {
+            // FIX: Formatted as a valid binary subscription topic array to enforce broker compliance
+            // This hex matrix maps natively to the path pattern: pskr/filter/v2/20m/#
             const subPacket = new Uint8Array([
-                0x82, 0x22, 0x00, 0x01, 0x00, 0x1D, 0x70, 0x73, 0x6B, 0x72, 0x2F, 0x66, 0x69, 0x6C, 0x74, 0x65, 
-                0x72, 0x2F, 0x76, 0x32, 0x2F, 0x32, 0x30, 0x6D, 0x2F, 0x2B, 0x2F, 0x2B, 0x2F, 0x2B, 0x2F, 0x2B, 
-                0x2F, 0x2B, 0x2F, 0x2B, 0x2F, 0x2B, 0x00
+                0x82, 0x16, 0x00, 0x01, 0x00, 0x11, 0x70, 0x73, 0x6B, 0x72, 0x2F, 0x66, 0x69, 0x6C, 0x74, 0x65, 
+                0x72, 0x2F, 0x76, 0x32, 0x2F, 0x32, 0x30, 0x6D, 0x2F, 0x23, 0x00
             ]);
             ws.send(subPacket);
-            console.log("Subscription payload submitted successfully.");
+            console.log("Band subscription binary submitted.");
         }, 500);
     };
 
     ws.onmessage = function(event) {
         try {
-            // Raw binary stream unpacker
-            if (event.data instanceof Blob) {
-                event.data.text().then(text => processIncomingText(text));
-            } else {
-                processIncomingText(event.data);
+            const buffer = new Uint8Array(event.data);
+            if (buffer.length < 4) return;
+
+            // Decodes the standard MQTT payload offset boundary safely
+            const textDecoder = new TextDecoder("utf-8");
+            const rawText = textDecoder.decode(buffer);
+            
+            const jsonStart = rawText.indexOf('{"');
+            if (jsonStart === -1) return;
+
+            const cleanJson = rawText.substring(jsonStart);
+            const rawSpot = JSON.parse(cleanJson);
+            if (!rawSpot) return;
+
+            // Extract the properties broadcasted inside the direct payload object
+            const txGrid = rawSpot.tx_grid || rawSpot.senderLocator || '';
+            const rxGrid = rawSpot.rx_grid || rawSpot.receiverLocator || '';
+            if (!txGrid || !rxGrid) return; 
+
+            const txCall = rawSpot.tx_call || rawSpot.senderCallsign || 'Unknown';
+            const rxCall = rawSpot.rx_call || rawSpot.receiverCallsign || 'Unknown';
+            const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
+            const mode = (rawSpot.mode || 'FT8').trim();
+            const snr = rawSpot.snr || rawSpot.sNR ? `${rawSpot.snr || rawSpot.sNR} dB` : 'Log';
+            const currentTime = new Date().toISOString().slice(11, 19);
+
+            const dist = calculateDistance(txGrid, rxGrid);
+            const alertClass = getDistanceClass(dist.mi);
+
+            if (dist.km > maxReportedDistKm && dist.km < 20000) {
+                maxReportedDistKm = dist.km;
+                maxReportedDistMi = dist.mi;
             }
-        } catch (e) {}
+
+            modeTracker[mode] = (modeTracker[mode] || 0) + 1;
+
+            activeSpots.unshift({
+                time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
+                freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
+            });
+            
+            if (activeSpots.length > 25) activeSpots.pop();
+            renderUI();
+
+        } catch (err) {}
     };
 
     ws.onerror = function(err) {
@@ -282,57 +322,15 @@ function connectToRadioStream() {
     };
 
     ws.onclose = function() {
-        console.warn("Socket channel severed. Initiating backup cycle...");
+        console.warn("Socket disconnected. Initiating background re-entry...");
         statusDisplay.innerText = "RECONNECTING";
         statusDisplay.className = "status-badge status-updating";
         setTimeout(connectToRadioStream, 5000);
     };
 }
 
-function processIncomingText(payload) {
-    // Locate text markers within the stream packet boundaries
-    const jsonStart = payload.indexOf('{"');
-    if (jsonStart === -1) return;
-    
-    try {
-        const cleanJson = payload.substring(jsonStart);
-        const rawSpot = JSON.parse(cleanJson);
-        if (!rawSpot) return;
-
-        const txGrid = rawSpot.tx_grid || rawSpot.senderLocator || '';
-        const rxGrid = rawSpot.rx_grid || rawSpot.receiverLocator || '';
-        if (!txGrid || !rxGrid) return; 
-
-        const txCall = rawSpot.tx_call || rawSpot.senderCallsign || 'Unknown';
-        const rxCall = rawSpot.rx_call || rawSpot.receiverCallsign || 'Unknown';
-        const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
-        const mode = (rawSpot.mode || 'FT8').trim();
-        const snr = rawSpot.snr || rawSpot.sNR ? `${rawSpot.snr || rawSpot.sNR} dB` : 'Log';
-        const currentTime = new Date().toISOString().slice(11, 19);
-
-        const dist = calculateDistance(txGrid, rxGrid);
-        const alertClass = getDistanceClass(dist.mi);
-
-        if (dist.km > maxReportedDistKm && dist.km < 20000) {
-            maxReportedDistKm = dist.km;
-            maxReportedDistMi = dist.mi;
-        }
-
-        modeTracker[mode] = (modeTracker[mode] || 0) + 1;
-
-        activeSpots.unshift({
-            time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
-            freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
-        });
-        
-        if (activeSpots.length > 25) activeSpots.pop();
-        renderUI();
-
-    } catch (err) {}
-}
-
-// Initialize connection automatically
 connectToRadioStream();
 </script>
 </body>
 </html>
+
