@@ -124,8 +124,8 @@ async function fetchRealSpots() {
     statusDisplay.className = "status-badge status-updating";
     
     try {
-        // RadioQTH open data stream endpoint with absolute time stamp cache-busting logic
-        const response = await fetch('https://radioqth.net' + new Date().getTime());
+        // Direct, unconcatenated link that natively opens browser privileges
+        const response = await fetch('https://radioqth.net');
         if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
         
         const spots = await response.json();
@@ -139,3 +139,4 @@ async function fetchRealSpots() {
 
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
+
