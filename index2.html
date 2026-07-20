@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live 2-Meter VHF Propagation Monitor</title>
+    <!-- Core library needed to safely run live WebSockets traffic -->
+    <script src="https://cloudflare.com" type="text/javascript"></script>
     <style>
         :root {
             --bg-main: #09090b;
@@ -104,14 +106,14 @@
     <header>
         <div>
             <h1>2-Meter VHF Propagation Monitor</h1>
-            <div style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Real-Time Operational Activity Data (144 MHz Band)</div>
+            <div style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Live Data Stream (144 MHz Band)</div>
         </div>
         <div id="monitor-status" class="status-badge status-updating">CONNECTING</div>
     </header>
 
     <div class="metrics-grid">
         <div class="card">
-            <div class="card-title">Active Logged Spots</div>
+            <div class="card-title">Active Stream Logs</div>
             <div id="total-spots" class="card-value">0</div>
         </div>
         <div class="card">
@@ -139,21 +141,22 @@
             </thead>
             <tbody id="data-table-body">
                 <tr>
-                    <td colspan="7" style="text-align: center; color: var(--text-muted);">Waiting for active feed updates...</td>
+                    <td colspan="7" style="text-align: center; color: var(--text-muted);">Listening for secure live frequency stream packets...</td>
                 </tr>
             </tbody>
         </table>
     </div>
 
     <footer>
-        <p>ℹ️ <strong>Data Disclosure:</strong> Operational data displayed on this dashboard is pulled dynamically via live data streams from the open <a href="https://spothole.app" target="_blank">Spothole Packet/DX Aggregator API</a> or mirrors.</p>
+        <p>ℹ️ <strong>Data Disclosure:</strong> Operational data displayed on this dashboard is streamed directly from the live public <a href="https://www.mqtt.pskreporter.info/" target="_blank">PSK Reporter MQTT Web Broker</a>.</p>
         <p>Distances are calculated client-side using the great-circle haversine formula based on logged Maidenhead locator attributes.</p>
     </footer>
 </div>
 <script>
-const UPDATE_INTERVAL = 30000; 
+let activeSpots = [];
 let maxReportedDistKm = 0;
 let maxReportedDistMi = 0;
+let modeTracker = {};
 
 const statusDisplay = document.getElementById('monitor-status');
 const spotsDisplay = document.getElementById('total-spots');
@@ -198,52 +201,23 @@ function getDistanceClass(miles) {
     return 'dist-extreme'; 
 }
 
-function processAndRenderSpots(spots) {
-    if (!spots || spots.length === 0) {
-        tableContainer.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No live 2m spots reported on the cluster in the last hour. Monitoring band...</td></tr>`;
-        spotsDisplay.innerText = "0";
-        statusDisplay.innerText = "ONLINE";
-        statusDisplay.className = "status-badge status-online";
-        return;
-    }
-
-    let modeTracker = {};
+function renderUI() {
+    if (activeSpots.length === 0) return;
+    
     let htmlRows = "";
-
-    spots.slice(0, 25).forEach(spot => {
-        const txCall = spot.de || 'Unknown';
-        const rxCall = spot.dx || 'Unknown';
-        const txGrid = spot.de_grid || 'FN20';
-        const rxGrid = spot.dx_grid || 'JO22';
-        const freq = spot.frequency ? parseFloat(spot.frequency).toFixed(4) : '144.1740';
-        const mode = spot.mode || (freq.includes('174') ? 'FT8' : 'VHF');
-        const snr = spot.db ? `${spot.db} dB` : 'Log';
-        
-        let displayTime = "Recent";
-        if (spot.time) displayTime = spot.time.toString().slice(0, 5);
-
-        const dist = calculateDistance(txGrid, rxGrid);
-        const colorClass = getDistanceClass(dist.mi);
-
-        if (dist.km > maxReportedDistKm && dist.km < 20000) {
-            maxReportedDistKm = dist.km;
-            maxReportedDistMi = dist.mi;
-        }
-
-        modeTracker[mode] = (modeTracker[mode] || 0) + 1;
-
+    activeSpots.forEach(spot => {
         htmlRows += `
             <tr>
-                <td>${displayTime} UTC</td>
-                <td><strong>${txCall}</strong></td>
-                <td>${rxCall}</td>
-                <td><span class="badge">${txGrid}</span> → <span class="badge">${rxGrid}</span></td>
-                <td>${freq} MHz</td>
+                <td>${spot.time}</td>
+                <td><strong>${spot.tx}</strong></td>
+                <td>${spot.rx}</td>
+                <td><span class="badge">${spot.txGrid}</span> → <span class="badge">${spot.rxGrid}</span></td>
+                <td>${spot.freq} MHz</td>
                 <td>
-                    <span class="${colorClass}">${dist.mi} mi</span> 
-                    <span style="color: #71717a; font-size: 0.8rem;">(${dist.km} km)</span>
+                    <span class="${spot.colorClass}">${spot.distanceMi} mi</span> 
+                    <span style="color: #71717a; font-size: 0.8rem;">(${spot.distanceKm} km)</span>
                 </td>
-                <td style="color: #10b981;">${snr} (${mode.toUpperCase()})</td>
+                <td style="color: #10b981;">${spot.snr} (${spot.mode})</td>
             </tr>
         `;
     });
@@ -253,34 +227,82 @@ function processAndRenderSpots(spots) {
         : 'VHF';
 
     tableContainer.innerHTML = htmlRows;
-    spotsDisplay.innerText = spots.length;
-    distanceDisplay.innerText = maxReportedDistKm > 0 ? `${maxReportedDistMi} mi / ${maxReportedDistKm} km` : 'Calculating...';
+    spotsDisplay.innerText = activeSpots.length;
+    distanceDisplay.innerText = `${maxReportedDistMi} mi / ${maxReportedDistKm} km`;
     modeDisplay.innerText = primaryMode;
-    
-    statusDisplay.innerText = "ONLINE";
-    statusDisplay.className = "status-badge status-online";
 }
 
-async function fetchRealSpots() {
-    statusDisplay.innerText = "UPDATING";
+// Setup Secure MQTT WebSocket Connection directly to the PSK Reporter Stream
+const clientId = "client-" + Math.floor(Math.random() * 100000);
+const client = new Paho.MQTT.Client("mqtt.pskreporter.info", 1886, clientId);
+
+client.onConnectionLost = function(responseObject) {
+    console.warn("Connection Dropped. Reconnecting...", responseObject.errorMessage);
+    statusDisplay.innerText = "RECONNECTING";
     statusDisplay.className = "status-badge status-updating";
-    
+    setTimeout(() => { client.connect({ useSSL: true, onSuccess: onConnect }); }, 5000);
+};
+
+client.onMessageArrived = function(message) {
     try {
-        // Direct, unproxied link to the open DXHeat live data server
-        const response = await fetch('https://dxheat.com');
-        if (!response.ok) throw new Error(`Server Error`);
+        const rawSpot = JSON.parse(message.payloadString);
+        if (!rawSpot) return;
+
+        // Extract clean metrics out of the WebSocket data frame
+        const txGrid = rawSpot.senderLocator || rawSpot.tx_grid || '';
+        const rxGrid = rawSpot.receiverLocator || rawSpot.rx_grid || '';
+        if (!txGrid || !rxGrid) return; // Skip logs missing grid calculations
+
+        const txCall = rawSpot.senderCallsign || 'Unknown';
+        const rxCall = rawSpot.receiverCallsign || 'Unknown';
+        const freq = rawSpot.frequency ? (parseInt(rawSpot.frequency) / 1000000).toFixed(4) : '144.1740';
+        const mode = (rawSpot.mode || 'FT8').trim();
+        const snr = rawSpot.sNR ? `${rawSpot.sNR} dB` : 'Log';
+        const currentTime = new Date().toISOString().slice(11, 19);
+
+        const dist = calculateDistance(txGrid, rxGrid);
+        const alertClass = getDistanceClass(dist.mi);
+
+        if (dist.km > maxReportedDistKm && dist.km < 20000) {
+            maxReportedDistKm = dist.km;
+            maxReportedDistMi = dist.mi;
+        }
+
+        modeTracker[mode] = (modeTracker[mode] || 0) + 1;
+
+        // Push new spot into memory array, capping list size to 25 items
+        activeSpots.unshift({
+            time: currentTime, tx: txCall, rx: rxCall, txGrid: txGrid, rxGrid: rxGrid,
+            freq: freq, mode: mode, snr: snr, distanceMi: dist.mi, distanceKm: dist.km, colorClass: alertClass
+        });
         
-        const spots = await response.json();
-        processAndRenderSpots(spots);
-    } catch (error) {
-        console.error("Data connections exhausted:", error);
+        if (activeSpots.length > 25) activeSpots.pop();
+        renderUI();
+
+    } catch (err) {
+        console.error("Payload processing error:", err);
+    }
+};
+
+function onConnect() {
+    console.log("Secure live WebSocket radio stream running.");
+    statusDisplay.innerText = "ONLINE";
+    statusDisplay.className = "status-badge status-online";
+    
+    // Subscribe directly to the 2m band filter path channel
+    client.subscribe("pskr/filter/v2/2m/+/+/+/+/+/+/+");
+}
+
+// Connect instantly over safe, encrypted network routes
+client.connect({ 
+    useSSL: true, 
+    onSuccess: onConnect,
+    onFailure: function(err) {
+        console.error("WebSocket setup failed:", err);
         statusDisplay.innerText = "CONN ERROR";
         statusDisplay.className = "status-badge status-error";
     }
-}
-
-fetchRealSpots();
-setInterval(fetchRealSpots, UPDATE_INTERVAL);
+});
 </script>
 </body>
 </html>
