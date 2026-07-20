@@ -267,45 +267,46 @@ function processAndRenderSpots(spots) {
     statusDisplay.className = "status-badge status-online";
 }
 
+// Global placeholder function that HamQTH will automatically execute when its data arrives
+window.handleHamQTHData = function(spots) {
+    console.log("Successfully intercepted live HamQTH 2m data stream via JSONP!");
+    processAndRenderSpots(spots);
+};
+
 async function fetchRealSpots() {
     statusDisplay.innerText = "UPDATING";
     statusDisplay.className = "status-badge status-updating";
     
-    // Route 1: Try Spothole via alternative fast gateway
     try {
-        const targetUrl = 'https://spothole.app';
-        const response = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(targetUrl));
-        if (!response.ok) throw new Error(`Primary Error`);
+        // Clear out any old lingering data scripts from previous updates
+        const oldScript = document.getElementById('hamqth-jsonp-stream');
+        if (oldScript) oldScript.remove();
         
-        const wrapper = await response.json();
-        const data = wrapper.contents ? JSON.parse(wrapper.contents) : {};
-        const spots = data.spots || [];
-        
-        processAndRenderSpots(spots);
-        return; 
-    } catch (e) {
-        console.warn("Primary proxy routing slow. Trying alternative mirror gateway...");
-    }
-
-    // Route 2: Try HamQTH via a clean direct secure proxy fetch
-    try {
-        // Using a fast, alternative open proxy mirror to bypass AllOrigins slowdowns
+        // 1. Build a direct, unproxied data link with a JSONP callback command
         const targetUrl = 'https://hamqth.com';
-        const backupResponse = await fetch('https://freeboard.io' + targetUrl);
-        if (!backupResponse.ok) throw new Error(`Backup Mirror Error`);
         
-        const spots = await backupResponse.json();
-        processAndRenderSpots(spots);
+        // 2. Inject it as a native script element so the browser treats it as safe internet navigation
+        const script = document.createElement('script');
+        script.id = 'hamqth-jsonp-stream';
+        script.src = targetUrl;
+        
+        // Handle network connection drops or server errors safely
+        script.onerror = function() {
+            throw new Error("HamQTH server injection connection dropped.");
+        };
+        
+        document.body.appendChild(script);
+
     } catch (error) {
-        console.error("All data connections exhausted:", error);
+        console.error("Data tracking stream connection failed:", error);
         statusDisplay.innerText = "CONN ERROR";
         statusDisplay.className = "status-badge status-error";
     }
 }
 
-
 fetchRealSpots();
 setInterval(fetchRealSpots, UPDATE_INTERVAL);
+
 
 
 
