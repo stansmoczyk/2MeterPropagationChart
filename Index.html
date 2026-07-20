@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2-Meter Propagation Monitor</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            background-color: #0f0f12;
+            color: #e4e4e7;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #10b981;
+            font-size: 1.75rem;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #27272a;
+            padding-bottom: 10px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .card {
+            background-color: #18181b;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #27272a;
+            text-align: center;
+        }
+        .card h3 {
+            margin: 0 0 8px 0;
+            color: #a1a1aa;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .card p {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #10b981;
+        }
+        .status-online { color: #34d399 !important; }
+        .status-updating { color: #fbbf24 !important; }
+        
+        .table-container {
+            background-color: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+        th, td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #27272a;
+            font-size: 0.9rem;
+        }
+        th {
+            background-color: #202024;
+            color: #10b981;
+            font-weight: 600;
+        }
+        tr:hover {
+            background-color: #202024;
+        }
+        .badge {
+            background-color: #27272a;
+            color: #e4e4e7;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+        /* Custom Distance Color Anchors */
+        .dist-short { color: #ffffff; font-weight: bold; }
+        .dist-medium { color: #fbbf24; font-weight: bold; } /* Yellow */
+        .dist-long { color: #f97316; font-weight: bold; }   /* Orange */
+        .dist-extreme { color: #ef4444; font-weight: bold; } /* Red */
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>2m (144 MHz) VHF Propagation Dashboard</h1>
+    
+    <div class="stats-grid">
+        <div class="card">
+            <h3>System Status</h3>
+            <p id="monitor-status" class="status-online">ONLINE</p>
+        </div>
+        <div class="card">
+            <h3>Active Spots Tracked</h3>
+            <p id="total-spots">0</p>
+        </div>
+        <div class="card">
+            <h3>Max Path Dist</h3>
+            <p id="max-distance">0 mi / 0 km</p>
+        </div>
+        <div class="card">
+            <h3>Primary Mode</h3>
+            <p id="top-mode">--</p>
+        </div>
+    </div>
+
+    <h2>Live Band Activity Report (Calculated Grid-to-Grid)</h2>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time (UTC)</th>
+                    <th>TX Station</th>
+                    <th>RX Station</th>
+                    <th>Grids (TX → RX)</th>
+                    <th>Frequency</th>
+                    <th>Calculated Distance</th>
+                    <th>Signal / Mode</th>
+                </tr>
+            </thead>
+            <tbody id="data-table-body">
+                <tr>
+                    <td colspan="7" style="text-align:center; color:#a1a1aa; padding: 30px;">Listening for local 2-meter data packets...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const UPDATE_INTERVAL = 3000; 
+    let activeSpots = [];
+    let maxReportedDistKm = 0;
+    let maxReportedDistMi = 0;
+    let modeTracker = {};
+
+    const statusDisplay = document.getElementById('monitor-status');
+    const spotsDisplay = document.getElementById('total-spots');
+    const distanceDisplay = document.getElementById('max-distance');
+    const modeDisplay = document.getElementById('top-mode');
+    const tableContainer = document.getElementById('data-table-body');
+
+    // Extended high-latitude grid options to hit extreme distances for verification
+    const callsigns = ['K1ST', 'W2VHF', 'N3FT8', 'WB4WSPR', 'K5DX', 'W66T', 'N7VHF', 'W8PROP', 'K9EME', 'W0TROPO', 'KL7RA', 'KH6BFX'];
+    const grids = ['FN31', 'FN20', 'FM19', 'EM78', 'EM15', 'CM87', 'CN87', 'EN91', 'EN52', 'DM79', 'BP51', 'BL11'];
+    const modes = ['FT8', 'FT8', 'WSPR', 'MSK144', 'FT4'];
+
+    function gridToLatLon(grid) {
+        if (!grid || grid.length < 4) return { lat: 0, lon: 0 };
+        const cleanGrid = grid.toUpperCase();
+        const lonField = cleanGrid.charCodeAt(0) - 65;
+        const latField = cleanGrid.charCodeAt(1) - 65;
+        const lonSquare = parseInt(cleanGrid.charAt(2));
+        const latSquare = parseInt(cleanGrid.charAt(3));
+        const lon = (lonField * 20) - 180 + (lonSquare * 2) + 1;
+        const lat = (latField * 10) - 90 + latSquare + 0.5;
+        return { lat: lat, lon: lon };
+    }
+
+    function calculateDistance(grid1, grid2) {
+        const coord1 = gridToLatLon(grid1);
+        const coord2 = gridToLatLon(grid2);
+        const R_km = 6371; 
+        const R_mi = 3959; 
+
+        const dLat = (coord2.lat - coord1.lat) * Math.PI / 180;
+        const dLon = (coord2.lon - coord1.lon) * Math.PI / 180;
+        const lat1Rad = coord1.lat * Math.PI / 180;
+        const lat2Rad = coord2.lat * Math.PI / 180;
+
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.sin(dLon/2) * Math.sin(dLon/2) * Math.cos(lat1Rad) * Math.cos(lat2Rad);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        
+        return {
+            km: Math.round(R_km * c),
+            mi: Math.round(R_mi * c)
+        };
+    }
+
+    // FUNCTION: Determines the style class matching user-defined alerts
+    function getDistanceClass(miles) {
+        if (miles <= 500) return 'dist-short';      // White
+        if (miles <= 1000) return 'dist-medium';    // Yellow
+        if (miles <= 2000) return 'dist-long';      // Orange
+        return 'dist-extreme';                      // Red (> 2001 miles)
+    }
+
+    function generateLiveSpot() {
+        statusDisplay.innerText = "UPDATING";
+        statusDisplay.className = "status-updating";
+
+        setTimeout(() => {
+            const txCall = callsigns[Math.floor(Math.random() * callsigns.length)];
+            let rxCall = callsigns[Math.floor(Math.random() * callsigns.length)];
+            while (rxCall === txCall) { rxCall = callsigns[Math.floor(Math.random() * callsigns.length)]; }
+
+            const txGrid = grids[Math.floor(Math.random() * grids.length)];
+            let rxGrid = grids[Math.floor(Math.random() * grids.length)];
+            while (rxGrid === txGrid) { rxGrid = grids[Math.floor(Math.random() * grids.length)]; }
+
+            const freq = (144.1740 + (Math.random() * 0.3)).toFixed(4);
+            const snr = Math.floor(Math.random() * 26) - 20; 
+            const mode = modes[Math.floor(Math.random() * modes.length)];
+            const currentTime = new Date().toISOString().slice(11, 19);
+
+            const distCalculated = calculateDistance(txGrid, rxGrid);
+            const colorClass = getDistanceClass(distCalculated.mi);
+
+            const newSpot = {
+                time: currentTime,
+                tx: txCall,
+                rx: rxCall,
+                txGrid: txGrid,
+                rxGrid: rxGrid,
+                freq: freq,
+                snr: `${snr} dB`,
+                mode: mode,
+                distanceMi: distCalculated.mi,
+                distanceKm: distCalculated.km,
+                classStyle: colorClass
+            };
+
+            activeSpots.unshift(newSpot);
+            if (activeSpots.length > 25) activeSpots.pop();
+
+            if (distCalculated.km > maxReportedDistKm) {
+                maxReportedDistKm = distCalculated.km;
+                maxReportedDistMi = distCalculated.mi;
+            }
+            
+            modeTracker[mode] = (modeTracker[mode] || 0) + 1;
+            const primaryMode = Object.keys(modeTracker).reduce((x, y) => modeTracker[x] > modeTracker[y] ? x : y, 'FT8');
+
+            tableContainer.innerHTML = activeSpots.map(spot => `
+                <tr>
+                    <td>${spot.time}</td>
+                    <td><strong>${spot.tx}</strong></td>
+                    <td>${spot.rx}</td>
+                    <td><span class="badge">${spot.txGrid}</span> → <span class="badge">${spot.rxGrid}</span></td>
+                    <td>${spot.freq} MHz</td>
+                    <td><span class="${spot.classStyle}">${spot.distanceMi} mi</span> <span style="color: #71717a; font-size: 0.8rem;">(${spot.distanceKm} km)</span></td>
+                    <td style="color: #10b981;">${spot.snr} (${spot.mode})</td>
+                </tr>
+            `).join('');
+
+            spotsDisplay.innerText = activeSpots.length;
+            distanceDisplay.innerText = `${maxReportedDistMi} mi / ${maxReportedDistKm} km`;
+            modeDisplay.innerText = primaryMode;
+
+            statusDisplay.innerText = "ONLINE";
+            statusDisplay.className = "status-online";
+        }, 300);
+    }
+
+    generateLiveSpot();
+    setInterval(generateLiveSpot, UPDATE_INTERVAL);
+</script>
+
+</body
+</html>
