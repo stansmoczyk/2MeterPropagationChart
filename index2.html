@@ -315,7 +315,7 @@ function initializeWebSocketStream() {
         statusDisplay.className = "status-badge status-online";
         
         // Connect to the high-traffic 20m HF band first to verify instant layout population!
-        client.subscribe("pskr/filter/v2/20m/+/+/+/+/+/+/+/+");
+        client.subscribe("pskr/filter/v2/2m/+/+/+/+/+/+/+/+");
     }
 
     client.connect({ 
